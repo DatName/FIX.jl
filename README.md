@@ -19,3 +19,19 @@ where `message_handler` is a subtype of `AbstractFIXHandler`.
 julia> FIX.send_message(client, Dict(1 => "a", 2 => "5"))
 ```
 and so on.
+
+```julia
+@benchmark fix.placeOrder(client, "buy", "BTC-EUR", 0.0001001, 12000.0)
+
+BenchmarkTools.Trial:
+  memory estimate:  19.06 KiB
+  allocs estimate:  299
+  --------------
+  minimum time:     15.816 μs (0.00% GC)
+  median time:      22.110 μs (0.00% GC)
+  mean time:        44.368 μs (41.69% GC)
+  maximum time:     28.548 ms (99.69% GC)
+  --------------
+  samples:          10000
+  evals/sample:     1
+```
