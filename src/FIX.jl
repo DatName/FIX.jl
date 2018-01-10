@@ -156,4 +156,12 @@ function getNextOutgoingMsgSeqNum(this::FIXClient)
     return getNextOutgoingMsgSeqNum(this.m_messages)
 end
 
+function getPosition(this::FIXClient, instrument::String)
+    return getPosition(this.m_messages, instrument)
+end
+
+function getPositions(this::FIXClient)
+    return getPositions(this.m_messages)
+end
+
 end

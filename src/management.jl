@@ -21,6 +21,50 @@ struct FIXIncomingMessages
     end
 end
 
+function getPosition(this::FIXIncomingMessages, instrument::String)
+    out = 0.0
+    if !haskey(this.executionReports, "1")
+        return out
+    end
+
+    for report in this.executionReports["1"]
+        if report[55] ≠ instrument
+            continue
+        end
+
+        if report[54] == "1"
+            out += parse(Float64, report[32])
+        else
+            out -= parse(Float64, report[32])
+        end
+    end
+
+    return out
+end
+
+function getPositions(this::FIXIncomingMessages)
+    out = Dict{String, Float64}()
+
+    if !haskey(this.executionReports, "1")
+        return out
+    end
+
+    for report in this.executionReports["1"]
+        if !haskey(out, report[55])
+            out[report[55]] = 0.0
+        end
+
+        sz = parse(Float64, report[32])
+        if report[54] == "1"
+            out[report[55]] = out[report[55]] + sz
+        else
+            out[report[55]] = out[report[55]] - sz
+        end
+    end
+
+    return out
+end
+
 function onNewMessage(this::FIXIncomingMessages, msg::DICTMSG)
     this.msgseqnum.data = msg[34]
     msg_type = msg[35]
@@ -252,4 +296,12 @@ end
 
 function getNextOutgoingMsgSeqNum(this::FIXOutgoingMessages)::String
     return string(this.msgseqnum.data + 1)
+end
+
+function getPosition(this::FIXMessageManagement, instrument::String)
+    return getPosition(this.incoming, instrument)
+end
+
+function getPositions(this::FIXMessageManagement)
+    return getPositions(this.incoming)
 end
