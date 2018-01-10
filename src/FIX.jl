@@ -52,51 +52,7 @@ mutable struct Container{T}
     data::T
 end
 
-struct FIXIncomingMessages
-    login::Dict{Int64, String}
-    logout::Dict{Int64, String}
-    executionReport::Vector{Dict{Int64, String}}
-    orderCancelReject::Dict{String, Dict{Int64, String}}
-    orderReject::Vector{Dict{Int64, String}}
-    heartbeat::Vector{Dict{Int64, String}}
-    msgseqnum::Container{String}
-    function FIXIncomingMessages()
-        return new(Dict{Int64, String}(),
-                Dict{Int64, String}(),
-                Vector{Dict{Int64, String}}(0),
-                Dict{String, Dict{Int64, String}}(),
-                Vector{Dict{Int64, String}}(0),
-                Vector{Dict{Int64, String}}(0),
-                Container("0"))
-    end
-end
-
-struct FIXOutgoingMessages
-    login::Dict{Int64, String}
-    logout::Dict{Int64, String}
-    newOrderSingle::Dict{String, Dict{Int64, String}}
-    orderCancelRequest::Dict{String, Dict{Int64, String}}
-    orderStatusRequest::Dict{String, Dict{Int64, String}}
-    msgseqnum::Container{Int64}
-    function FIXOutgoingMessages()
-        return new(Dict{Int64, String}(),
-                Dict{Int64, String}(),
-                Dict{String, Dict{Int64, String}}(),
-                Dict{String, Dict{Int64, String}}(),
-                Dict{String, Dict{Int64, String}}(),
-                Container(0))
-    end
-end
-
-struct FIXMessageManagement
-    incoming::FIXIncomingMessages
-    outgoing::FIXOutgoingMessages
-    function FIXMessageManagement()
-        return new(FIXIncomingMessages(),
-                    FIXOutgoingMessages())
-
-    end
-end
+include("management.jl")
 
 struct FIXClient{T <: IO, H <: AbstractFIXHandler}
     stream::T
@@ -122,7 +78,7 @@ checksum(this::String)::Int64 = sum([Int(x) for x in this]) % 256
 fixjoin(this::OrderedDict{Int64, String}, delimiter::Char)::String = join([string(k) * "=" * v for (k, v) in this], delimiter) * delimiter
 fixjoin(this::Dict{Int64, String}, delimiter::Char)::String = join([string(k) * "=" * v for (k, v) in this], delimiter) * delimiter
 
-function fixmessage(this::FIXClient, msg::Dict{Int64, String})
+function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int64, String}
     ordered = OrderedDict{Int64, String}()
 
     #header
@@ -131,7 +87,7 @@ function fixmessage(this::FIXClient, msg::Dict{Int64, String})
     ordered[35] = msg[35] #message type
     ordered[49] = this.m_head[49] #SenderCompID
     ordered[56] = this.m_head[56] #TargetCompID
-    ordered[34] = string(this.m_messages.outgoing.msgseqnum.data + 1) #MsgSeqNum
+    ordered[34] = getNextOutgoingMsgSeqNum(this)
     ordered[52] = ""
     #body
     body_length = 0
@@ -163,24 +119,10 @@ end
 
 function send_message(this::FIXClient, msg::Dict{Int64, String})
     msg = fixmessage(this, msg)
-    msg_type = msg[35]
-    if msg_type == "D"
-        this.m_messages.outgoing.newOrderSingle[msg[11]] = msg
-    elseif msg_type == "F"
-        this.m_messages.outgoing.orderCancelRequest[msg[11]] = msg
-    elseif msg_type == "H"
-        this.m_messages.outgoing.orderStatusRequest[msg[37]] = msg
-    elseif msg_type == "A"
-        [this.m_messages.outgoing.login[k] = v for (k, v) in msg]
-    elseif msg_type == "5"
-        [this.m_messages.outgoing.logout[k] = v for (k, v) in msg]
-    else
-        @printf("[%ls] Unknown OUTGOING msg type %ls\n", now(), msg_type)
-    end
-
     msg_str = fixjoin(msg, this.delimiter)
+
     write(this.stream, msg_str)
-    this.m_messages.outgoing.msgseqnum.data = parse(Int64, msg[34])
+    onSent(this.m_messages, msg)
 
     return (msg, msg_str)
 end
@@ -195,25 +137,7 @@ function start(this::FIXClient)
             end
 
             for (_, msg) in fixparse(incoming)
-                this.m_messages.incoming.msgseqnum.data = msg[34]
-
-                msg_type = msg[35]
-                if msg_type == "8"
-                    push!(this.m_messages.incoming.executionReport, msg)
-                elseif msg_type == "9"
-                    this.m_messages.incoming.orderCancelReject[msg[11]] = msg
-                elseif msg_type == "3"
-                    push!(this.m_messages.incoming.orderReject, msg)
-                elseif msg_type == "0"
-                    push!(this.m_messages.incoming.heartbeat, msg)
-                elseif msg_type == "A"
-                    [this.m_messages.incoming.login[k] = v for (k, v) in msg]
-                elseif msg_type == "5"
-                    [this.m_messages.incoming.logout[k] = v for (k, v) in msg]
-                else
-                    @printf("[%ls] Unknown INCOMING message type: %ls\n", now(), msg_type)
-                end
-
+                onGet(this.m_messages, msg)
                 onFIXMessage(this.handler, msg)
             end
         end
@@ -224,5 +148,12 @@ function start(this::FIXClient)
 end
 
 include("parse.jl")
+function getOpenOrders(this::FIXClient)::Vector{Dict{Int64, String}}
+    return getOpenOrders(this.m_messages)
+end
+
+function getNextOutgoingMsgSeqNum(this::FIXClient)
+    return getNextOutgoingMsgSeqNum(this.m_messages)
+end
 
 end
