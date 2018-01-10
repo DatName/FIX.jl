@@ -13,7 +13,7 @@ julia> using FIX
 julia> sock = MbedTLS.connect("127.0.0.1", 1498)
 julia> client = FIXClient(sock, message_handler, header)
 ```
-where `message_handler` is a subtype of `AbstractFIXHandler`.
+where `message_handler` is a subtype of `AbstractMessageHandler`.
 
 ```julia
 julia> FIX.send_message(client, Dict(1 => "a", 2 => "5"))

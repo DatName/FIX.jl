@@ -128,6 +128,7 @@ struct FIXOutgoingMessages
     newOrderSingle::Dict{String, DICTMSG} #client order id ->
     orderCancelRequest::Dict{String, DICTMSG} #client order id ->
     orderStatusRequest::Vector{DICTMSG}
+    pending::Dict{String, DICTMSG} #client order id ->
     msgseqnum::Container{Int64}
     function FIXOutgoingMessages()
         return new(DICTMSG(),
@@ -135,6 +136,7 @@ struct FIXOutgoingMessages
                 Dict{String, DICTMSG}(),
                 Dict{String, DICTMSG}(),
                 Vector{DICTMSG}(0),
+                Dict{String, DICTMSG}(),
                 Container(0))
     end
 end
@@ -144,6 +146,7 @@ function onNewMessage(this::FIXOutgoingMessages, msg::DICTMSG)
     this.msgseqnum.data = parse(Int64, msg[34])
 
     if msg_type == "D"
+        this.pending[msg[11]] = msg
         addNewOrderSingle(this, msg)
     elseif msg_type == "F"
         addOrderCancelRequest(this, msg)
@@ -212,9 +215,23 @@ end
 
 function onGet(this::FIXMessageManagement, msg::DICTMSG)
     onNewMessage(this.incoming, msg)
+
+    for order_id in keys(this.outgoing.pending)
+        if hasOrderByClientID(this.open, order_id)
+            delete!(this.outgoing.pending, order_id)
+        end
+    end
+
     if msg[35] == "8"
         onExecutionReport(this.open, msg)
     end
+
+    for order_id in keys(this.outgoing.pending)
+        if hasOrderByClientID(this.open, order_id)
+            delete!(this.outgoing.pending, order_id)
+        end
+    end
+    
     return nothing
 end
 
@@ -236,20 +253,34 @@ function onFill(this::FIXOpenOrders, msg::DICTMSG)
 end
 
 function onDone(this::FIXOpenOrders, msg::DICTMSG)
-    exchange_order_id = msg[37]
-    deleteOrderByExchangeID(this, exchange_order_id)
+    deleteOrderByExchangeID(this, msg[37])
 end
 
 function onCancel(this::FIXOpenOrders, msg::DICTMSG)
-    exchange_order_id = msg[37]
-    deleteOrderByExchangeID(this, exchange_order_id)
+    deleteOrderByExchangeID(this, msg[37])
+end
+
+function onReject(this::FIXOpenOrders, msg::DICTMSG)
+    deleteOrderByExchangeID(this, msg[37])
 end
 
 function getOrderByExchangeID(this::FIXOpenOrders, exchange_id::String)
     return this.exchng_id[exchange_id]
 end
 
-function deleteOrderByExchangeID(this::FIXOpenOrders, exchange_id::String)
+function hasOrderByClientID(this::FIXOpenOrders, client_id::String)
+    return haskey(this.client_id, client_id)
+end
+
+function hasOrderByExchangeID(this::FIXOpenOrders, exchange_id::String)
+    return haskey(this.exchng_id, exchange_id)
+end
+
+function deleteOrderByExchangeID(this::FIXOpenOrders, exchange_id::String)::Void
+    if !hasOrderByExchangeID(this, exchange_id)
+        return nothing
+    end
+
     orig_exec = getOrderByExchangeID(this, exchange_id)
 
     client_id = orig_exec[11]
@@ -276,6 +307,7 @@ function onExecutionReport(this::FIXOpenOrders, msg::DICTMSG)
         this.verbose && @printf("[%ls][FIX:ER] cancel\n", now())
         onCancel(this, msg)
     elseif exec_type == "8"
+        onReject(this, msg)
         this.verbose && @printf("[%ls][FIX:ER] reject\n", now())
     else
         @printf("Received unhandled execution report of type %ls\n", exec_type)
@@ -288,6 +320,10 @@ end
 
 function getOpenOrders(this::FIXMessageManagement)::Vector{DICTMSG}
     return getOrders(this.open)
+end
+
+function hasPendingOrders(this::FIXMessageManagement)::Bool
+    return !isempty(this.outgoing.pending)
 end
 
 function getNextOutgoingMsgSeqNum(this::FIXMessageManagement)::String

@@ -1,16 +1,17 @@
 module FIX
 
 using DataStructures
+using DandelionWebSockets
 
 global const TAGS_INT_STRING = Dict{Int64, String}()
 global const TAGS_STRING_INT = Dict{String, Int64}()
 
 import Base: start, next, done, length, collect
 
-abstract type AbstractFIXHandler end
-export AbstractFIXHandler, FIXClient, send_message, start, next, done, length
+abstract type AbstractMessageHandler <: DandelionWebSockets.WebSocketHandler end
+export AbstractMessageHandler, FIXClient, send_message, start, next, done, length
 
-function onFIXMessage(this::AbstractFIXHandler, x::Any)
+function onFIXMessage(this::AbstractMessageHandler, x::Any)
     T = typeof(this)
     X = typeof(x)
     throw(ErrorException("Method `onFIXMessage` is not implemented by $T for argument type $X"))
@@ -54,7 +55,7 @@ end
 
 include("management.jl")
 
-struct FIXClient{T <: IO, H <: AbstractFIXHandler}
+struct FIXClient{T <: IO, H <: AbstractMessageHandler}
     stream::T
     handler::H
     delimiter::Char
@@ -64,7 +65,7 @@ struct FIXClient{T <: IO, H <: AbstractFIXHandler}
     function FIXClient(stream::T,
                         handler::H,
                         header::Dict{Int64, String};
-                        delimiter::Char = Char(1)) where {T <: IO, H <: AbstractFIXHandler}
+                        delimiter::Char = Char(1)) where {T <: IO, H <: AbstractMessageHandler}
         return new{T, H}(stream,
                         handler,
                         delimiter,
@@ -162,6 +163,10 @@ end
 
 function getPositions(this::FIXClient)
     return getPositions(this.m_messages)
+end
+
+function hasPendingOrders(this::FIXClient)
+    return hasPendingOrders(this.m_messages)
 end
 
 end
