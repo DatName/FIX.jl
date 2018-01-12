@@ -10,6 +10,7 @@ import Base: start, next, done, length, collect
 
 abstract type AbstractMessageHandler <: DandelionWebSockets.WebSocketHandler end
 export AbstractMessageHandler, FIXClient, send_message, start, next, done, length
+export onFIXMessage
 
 function onFIXMessage(this::AbstractMessageHandler, x::Any)
     T = typeof(this)
@@ -165,8 +166,7 @@ function getPositions(this::FIXClient)
     return getPositions(this.m_messages)
 end
 
-function hasPendingOrders(this::FIXClient)
-    return hasPendingOrders(this.m_messages)
 end
 
-end
+# include("quote.jl")
+# using .FIXQuoting

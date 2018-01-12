@@ -21,6 +21,49 @@ struct FIXIncomingMessages
     end
 end
 
+struct FIXOutgoingMessages
+    login::DICTMSG
+    logout::DICTMSG
+    newOrderSingle::Dict{String, DICTMSG} #client order id ->
+    orderCancelRequest::Dict{String, DICTMSG} #client order id ->
+    orderStatusRequest::Vector{DICTMSG}
+    msgseqnum::Container{Int64}
+    function FIXOutgoingMessages()
+        return new(DICTMSG(),
+                DICTMSG(),
+                Dict{String, DICTMSG}(),
+                Dict{String, DICTMSG}(),
+                Vector{DICTMSG}(0),
+                Container(0))
+    end
+end
+
+const ClientOrderID = String
+const ExchangeOrderID = String
+
+struct FIXOpenOrders
+    client_id::Dict{String, DICTMSG}
+    exchng_id::Dict{String, DICTMSG}
+    verbose::Bool
+    function FIXOpenOrders(verbose::Bool = false)
+        return new(Dict{String, DICTMSG}(),
+                    Dict{String, DICTMSG}(),
+                    verbose)
+    end
+end
+
+struct FIXMessageManagement
+    incoming::FIXIncomingMessages
+    outgoing::FIXOutgoingMessages
+    open::FIXOpenOrders
+    function FIXMessageManagement(verbose::Bool = false)
+        return new(FIXIncomingMessages(),
+                    FIXOutgoingMessages(),
+                    FIXOpenOrders(verbose))
+
+    end
+end
+
 function getPosition(this::FIXIncomingMessages, instrument::String)
     out = 0.0
     if !haskey(this.executionReports, "1")
@@ -106,7 +149,7 @@ function addExecutionReport(this::FIXIncomingMessages, msg::DICTMSG)
     push!(this.executionReports[msg[150]], msg)
 end
 
-function addOrderCancelRequest(this::FIXIncomingMessages, msg::DICTMSG)
+function addOrderCancelReject(this::FIXIncomingMessages, msg::DICTMSG)
     push!(this.orderCancelReject, msg)
 end
 
@@ -122,31 +165,11 @@ function addResend(this::FIXIncomingMessages, msg::DICTMSG)
     push!(this.resend, msg)
 end
 
-struct FIXOutgoingMessages
-    login::DICTMSG
-    logout::DICTMSG
-    newOrderSingle::Dict{String, DICTMSG} #client order id ->
-    orderCancelRequest::Dict{String, DICTMSG} #client order id ->
-    orderStatusRequest::Vector{DICTMSG}
-    pending::Dict{String, DICTMSG} #client order id ->
-    msgseqnum::Container{Int64}
-    function FIXOutgoingMessages()
-        return new(DICTMSG(),
-                DICTMSG(),
-                Dict{String, DICTMSG}(),
-                Dict{String, DICTMSG}(),
-                Vector{DICTMSG}(0),
-                Dict{String, DICTMSG}(),
-                Container(0))
-    end
-end
-
 function onNewMessage(this::FIXOutgoingMessages, msg::DICTMSG)
     msg_type = msg[35]
     this.msgseqnum.data = parse(Int64, msg[34])
 
     if msg_type == "D"
-        this.pending[msg[11]] = msg
         addNewOrderSingle(this, msg)
     elseif msg_type == "F"
         addOrderCancelRequest(this, msg)
@@ -182,32 +205,6 @@ function addOrderStatusRequest(this::FIXOutgoingMessages, msg::DICTMSG)
     push!(this.orderStatusRequest, msg)
 end
 
-const ClientOrderID = String
-const ExchangeOrderID = String
-
-struct FIXOpenOrders
-    client_id::Dict{String, DICTMSG}
-    exchng_id::Dict{String, DICTMSG}
-    verbose::Bool
-    function FIXOpenOrders(verbose::Bool = false)
-        return new(Dict{String, DICTMSG}(),
-                    Dict{String, DICTMSG}(),
-                    verbose)
-    end
-end
-
-struct FIXMessageManagement
-    incoming::FIXIncomingMessages
-    outgoing::FIXOutgoingMessages
-    open::FIXOpenOrders
-    function FIXMessageManagement(verbose::Bool = false)
-        return new(FIXIncomingMessages(),
-                    FIXOutgoingMessages(),
-                    FIXOpenOrders(verbose))
-
-    end
-end
-
 function onSent(this::FIXMessageManagement, msg::DICTMSG)
     onNewMessage(this.outgoing, msg)
     return nothing
@@ -216,23 +213,19 @@ end
 function onGet(this::FIXMessageManagement, msg::DICTMSG)
     onNewMessage(this.incoming, msg)
 
-    for order_id in keys(this.outgoing.pending)
-        if hasOrderByClientID(this.open, order_id)
-            delete!(this.outgoing.pending, order_id)
-        end
-    end
-
     if msg[35] == "8"
         onExecutionReport(this.open, msg)
     end
 
-    for order_id in keys(this.outgoing.pending)
-        if hasOrderByClientID(this.open, order_id)
-            delete!(this.outgoing.pending, order_id)
-        end
-    end
-    
     return nothing
+end
+
+function onCancelReject(this::FIXMessageManagement, msg::DICTMSG)
+    addOrderCancelReject(this.incoming, msg)
+end
+
+function onOrderReject(this::FIXMessageManagement, msg::DICTMSG)
+    addOrderReject(this.incoming, msg)
 end
 
 function onNewOrder(this::FIXOpenOrders, msg::DICTMSG)
@@ -320,10 +313,6 @@ end
 
 function getOpenOrders(this::FIXMessageManagement)::Vector{DICTMSG}
     return getOrders(this.open)
-end
-
-function hasPendingOrders(this::FIXMessageManagement)::Bool
-    return !isempty(this.outgoing.pending)
 end
 
 function getNextOutgoingMsgSeqNum(this::FIXMessageManagement)::String
