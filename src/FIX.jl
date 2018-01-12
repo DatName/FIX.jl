@@ -6,10 +6,10 @@ using DandelionWebSockets
 global const TAGS_INT_STRING = Dict{Int64, String}()
 global const TAGS_STRING_INT = Dict{String, Int64}()
 
-import Base: start, next, done, length, collect
+import Base: start, next, done, length, collect, close
 
 abstract type AbstractMessageHandler <: DandelionWebSockets.WebSocketHandler end
-export AbstractMessageHandler, FIXClient, send_message, start, next, done, length
+export AbstractMessageHandler, FIXClient, send_message, start, close
 export onFIXMessage
 
 function onFIXMessage(this::AbstractMessageHandler, x::Any)
@@ -147,6 +147,10 @@ function start(this::FIXClient)
     end
     )
     return this.m_tasks
+end
+
+function close(this::FIXClient)
+    close(this.stream)
 end
 
 include("parse.jl")
