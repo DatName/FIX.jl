@@ -27,6 +27,7 @@ struct FIXOutgoingMessages
     newOrderSingle::Dict{String, DICTMSG} #client order id ->
     orderCancelRequest::Dict{String, DICTMSG} #client order id ->
     orderStatusRequest::Vector{DICTMSG}
+    orderCancelReplaceRequest::Dict{String ,DICTMSG}
     msgseqnum::Container{Int64}
     function FIXOutgoingMessages()
         return new(DICTMSG(),
@@ -34,6 +35,7 @@ struct FIXOutgoingMessages
                 Dict{String, DICTMSG}(),
                 Dict{String, DICTMSG}(),
                 Vector{DICTMSG}(0),
+                Dict{String ,DICTMSG}(),
                 Container(0))
     end
 end
@@ -179,6 +181,8 @@ function onNewMessage(this::FIXOutgoingMessages, msg::DICTMSG)
         addLogin(this, msg)
     elseif msg_type == "5"
         addLogout(this, msg)
+    elseif msg_type == "G"
+        addCancelReplace(this, msg)
     else
         @printf("[%ls] Unknown OUTGOING msg type %ls\n", now(), msg_type)
     end
@@ -203,6 +207,10 @@ end
 
 function addOrderStatusRequest(this::FIXOutgoingMessages, msg::DICTMSG)
     push!(this.orderStatusRequest, msg)
+end
+
+function addCancelReplace(this::FIXOutgoingMessages, msg::DICTMSG)
+    this.orderCancelReplaceRequest[msg[11]] = msg
 end
 
 function onSent(this::FIXMessageManagement, msg::DICTMSG)

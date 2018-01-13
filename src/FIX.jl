@@ -54,11 +54,21 @@ mutable struct Container{T}
     data::T
 end
 
+include("parse.jl")
 include("management.jl")
+
+struct FIXQuote
+    incoming::Vector{DICTMSG}
+    outgoing::OrderedDict{String, DICTMSG}
+    function FIXQuote()
+        new(Vector{DICTMSG}(0),
+            OrderedDict{String, DICTMSG}())
+    end
+end
 
 struct FIXClient{T <: IO, H <: AbstractMessageHandler}
     stream::T
-    handler::H
+    handler::H,
     delimiter::Char
     m_head::Dict{Int64, String}
     m_tasks::FIXClientTasks
@@ -67,8 +77,8 @@ struct FIXClient{T <: IO, H <: AbstractMessageHandler}
                         handler::H,
                         header::Dict{Int64, String};
                         delimiter::Char = Char(1)) where {T <: IO, H <: AbstractMessageHandler}
-        return new{T, H}(stream,
-                        handler,
+        return new{T}(stream,
+                        handler::H,
                         delimiter,
                         header,
                         FIXClientTasks(),
@@ -120,12 +130,12 @@ function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int6
 end
 
 function send_message(this::FIXClient, msg::Dict{Int64, String})
-    msg = fixmessage(this, msg)
+    if !fixed
+        msg = fixmessage(this, msg)
+    end
     msg_str = fixjoin(msg, this.delimiter)
-
     write(this.stream, msg_str)
     onSent(this.m_messages, msg)
-
     return (msg, msg_str)
 end
 
@@ -139,8 +149,7 @@ function start(this::FIXClient)
             end
 
             for (_, msg) in fixparse(incoming)
-                onGet(this.m_messages, msg)
-                onFIXMessage(this.handler, msg)
+                onGet(this, msg)
             end
         end
         @printf("[%ls] FIX: read task done\n", now())
@@ -153,7 +162,10 @@ function close(this::FIXClient)
     close(this.stream)
 end
 
-include("parse.jl")
+function onGet(this::FIXClient, msg::DICTMSG)
+    onGet(this.m_messages, msg)
+end
+
 function getOpenOrders(this::FIXClient)::Vector{Dict{Int64, String}}
     return getOpenOrders(this.m_messages)
 end
@@ -171,6 +183,3 @@ function getPositions(this::FIXClient)
 end
 
 end
-
-# include("quote.jl")
-# using .FIXQuoting
