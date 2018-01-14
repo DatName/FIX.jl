@@ -57,32 +57,26 @@ end
 include("parse.jl")
 include("management.jl")
 
-struct FIXQuote
-    incoming::Vector{DICTMSG}
-    outgoing::OrderedDict{String, DICTMSG}
-    function FIXQuote()
-        new(Vector{DICTMSG}(0),
-            OrderedDict{String, DICTMSG}())
-    end
-end
-
 struct FIXClient{T <: IO, H <: AbstractMessageHandler}
     stream::T
-    handler::H,
+    handler::H
     delimiter::Char
     m_head::Dict{Int64, String}
     m_tasks::FIXClientTasks
     m_messages::FIXMessageManagement
+    m_lock::ReentrantLock
     function FIXClient(stream::T,
                         handler::H,
-                        header::Dict{Int64, String};
+                        header::Dict{Int64, String},
+                        ratelimit::RateLimit;
                         delimiter::Char = Char(1)) where {T <: IO, H <: AbstractMessageHandler}
-        return new{T}(stream,
-                        handler::H,
+        return new{T, H}(stream,
+                        handler,
                         delimiter,
                         header,
                         FIXClientTasks(),
-                        FIXMessageManagement())
+                        FIXMessageManagement(ratelimit),
+                        ReentrantLock())
     end
 end
 
@@ -130,12 +124,15 @@ function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int6
 end
 
 function send_message(this::FIXClient, msg::Dict{Int64, String})
-    if !fixed
-        msg = fixmessage(this, msg)
-    end
+    lock(this.m_lock)
+
+    msg = fixmessage(this, msg)
     msg_str = fixjoin(msg, this.delimiter)
     write(this.stream, msg_str)
     onSent(this.m_messages, msg)
+
+    unlock(this.m_lock)
+
     return (msg, msg_str)
 end
 
@@ -150,6 +147,7 @@ function start(this::FIXClient)
 
             for (_, msg) in fixparse(incoming)
                 onGet(this, msg)
+                onFIXMessage(this.handler, msg)
             end
         end
         @printf("[%ls] FIX: read task done\n", now())
@@ -180,6 +178,10 @@ end
 
 function getPositions(this::FIXClient)
     return getPositions(this.m_messages)
+end
+
+function numMsgsLeftToSend(this::FIXClient)
+    return numleft(this.m_messages.outgoing.ratelimit, now())
 end
 
 end

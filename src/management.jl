@@ -1,4 +1,40 @@
 const DICTMSG = OrderedDict{Int64, String}
+import Base: push!
+
+export RateLimit, isexceeded, numleft
+
+struct RateLimit
+    buffer::CircularBuffer{DateTime}
+    period::Dates.Second
+    function RateLimit(maxMessages::Int64, period::Dates.Second)
+        return new(CircularBuffer{DateTime}(maxMessages), period)
+    end
+end
+
+function push!(this::RateLimit, n::DateTime)
+    push!(this.buffer, n)
+end
+
+function isexceeded(this::RateLimit, n::DateTime)
+    return n - first(this) < this.period
+end
+
+"messages per second"
+function (this::RateLimit)()::Float64
+    dur = (last(this.buffer) - first(this.buffer)).value/1000.0
+    nm = length(this.buffer)
+    return dur ≈ 0.0 ? nm / this.period.value : nm / dur
+end
+
+function numleft(this::RateLimit, n::DateTime)::Int64
+    out = capacity(this.buffer) - length(this.buffer)
+    for t in this.buffer
+        if n - t > this.period
+            out += 1
+        end
+    end
+    return out
+end
 
 struct FIXIncomingMessages
     login::DICTMSG
@@ -9,7 +45,8 @@ struct FIXIncomingMessages
     resend::Vector{DICTMSG}
     heartbeat::Vector{DICTMSG}
     msgseqnum::Container{String}
-    function FIXIncomingMessages()
+    ratelimit::RateLimit
+    function FIXIncomingMessages(ratelimit::RateLimit)
         return new(DICTMSG(),
                 DICTMSG(),
                 Dict{String, Vector{DICTMSG}}(),
@@ -17,7 +54,8 @@ struct FIXIncomingMessages
                 Vector{DICTMSG}(0),
                 Vector{DICTMSG}(0),
                 Vector{DICTMSG}(0),
-                Container("0"))
+                Container("0"),
+                ratelimit)
     end
 end
 
@@ -29,14 +67,16 @@ struct FIXOutgoingMessages
     orderStatusRequest::Vector{DICTMSG}
     orderCancelReplaceRequest::Dict{String ,DICTMSG}
     msgseqnum::Container{Int64}
-    function FIXOutgoingMessages()
+    ratelimit::RateLimit
+    function FIXOutgoingMessages(ratelimit::RateLimit)
         return new(DICTMSG(),
                 DICTMSG(),
                 Dict{String, DICTMSG}(),
                 Dict{String, DICTMSG}(),
                 Vector{DICTMSG}(0),
                 Dict{String ,DICTMSG}(),
-                Container(0))
+                Container(0),
+                ratelimit)
     end
 end
 
@@ -58,9 +98,9 @@ struct FIXMessageManagement
     incoming::FIXIncomingMessages
     outgoing::FIXOutgoingMessages
     open::FIXOpenOrders
-    function FIXMessageManagement(verbose::Bool = false)
-        return new(FIXIncomingMessages(),
-                    FIXOutgoingMessages(),
+    function FIXMessageManagement(ratelimit::RateLimit, verbose::Bool = false)
+        return new(FIXIncomingMessages(ratelimit),
+                    FIXOutgoingMessages(ratelimit),
                     FIXOpenOrders(verbose))
 
     end
@@ -117,9 +157,9 @@ function onNewMessage(this::FIXIncomingMessages, msg::DICTMSG)
     if msg_type == "8"
         addExecutionReport(this, msg)
     elseif msg_type == "9"
-        addOrderCancelRequest(this, msg)
+        addOrderCancelReject(this, msg)
     elseif msg_type == "3"
-        @printf("[%ls][FIX:ER] received order reject\n", now())
+        @printf("[%ls][FIX:ER] received order reject. Reason: %ls\n", now(), msg[58])
         addOrderReject(this, msg)
     elseif msg_type == "0"
         addHeartbeat(this, msg)
@@ -210,11 +250,12 @@ function addOrderStatusRequest(this::FIXOutgoingMessages, msg::DICTMSG)
 end
 
 function addCancelReplace(this::FIXOutgoingMessages, msg::DICTMSG)
-    this.orderCancelReplaceRequest[msg[11]] = msg
+    this.orderCancelReplaceRequest[msg[1]]
 end
 
 function onSent(this::FIXMessageManagement, msg::DICTMSG)
     onNewMessage(this.outgoing, msg)
+    push!(this.outgoing.ratelimit, now())
     return nothing
 end
 
