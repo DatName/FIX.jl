@@ -65,24 +65,32 @@ struct FIXClient{T <: IO, H <: AbstractMessageHandler}
     m_tasks::FIXClientTasks
     m_messages::FIXMessageManagement
     m_lock::ReentrantLock
+    #optimization
+    m_intmap::Dict{Int64, String}
     function FIXClient(stream::T,
                         handler::H,
                         header::Dict{Int64, String},
                         ratelimit::RateLimit;
                         delimiter::Char = Char(1)) where {T <: IO, H <: AbstractMessageHandler}
+        m_intmap = Dict{Int64, String}()
+        [m_intmap[id] = string(id) for id = 1 : 9999]
         return new{T, H}(stream,
                         handler,
                         delimiter,
                         header,
                         FIXClientTasks(),
                         FIXMessageManagement(ratelimit),
-                        ReentrantLock())
+                        ReentrantLock(),
+                        m_intmap)
     end
 end
 
 checksum(this::String)::Int64 = sum([Int(x) for x in this]) % 256
 fixjoin(this::OrderedDict{Int64, String}, delimiter::Char)::String = join([string(k) * "=" * v for (k, v) in this], delimiter) * delimiter
-fixjoin(this::Dict{Int64, String}, delimiter::Char)::String = join([string(k) * "=" * v for (k, v) in this], delimiter) * delimiter
+
+function fixjoin(this::OrderedDict{Int64, String}, delimiter::Char, IntMap::Dict{Int64, String})::String
+    join([IntMap[k] * "=" * v for (k, v) in this], delimiter) * delimiter
+end
 
 function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int64, String}
     ordered = OrderedDict{Int64, String}()
@@ -111,7 +119,7 @@ function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int6
     ordered[9] = string(body_length)
 
     #tail
-    msg = fixjoin(ordered, this.delimiter)
+    msg = fixjoin(ordered, this.delimiter, this.m_intmap)
     c = checksum(msg)
     c_str = string(c)
     while length(c_str) < 3
@@ -123,11 +131,24 @@ function fixmessage(this::FIXClient, msg::Dict{Int64, String})::OrderedDict{Int6
     return ordered
 end
 
+function send_message_fake(this::FIXClient, msg::Dict{Int64, String})
+    lock(this.m_lock)
+
+    msg = fixmessage(this, msg)
+    msg_str = fixjoin(msg, this.delimiter, this.m_intmap)
+    # write(this.stream, msg_str)
+    onSent(this.m_messages, msg)
+
+    unlock(this.m_lock)
+
+    return (msg, msg_str)
+end
+
 function send_message(this::FIXClient, msg::Dict{Int64, String})
     lock(this.m_lock)
 
     msg = fixmessage(this, msg)
-    msg_str = fixjoin(msg, this.delimiter)
+    msg_str = fixjoin(msg, this.delimiter, this.m_intmap)
     write(this.stream, msg_str)
     onSent(this.m_messages, msg)
 
