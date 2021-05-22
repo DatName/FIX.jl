@@ -29,6 +29,18 @@ julia> FIX.getOpenOrders(client)
 ```
 and so on.
 
+Your custom `message_handler` must implement method `onFIXMessage` in order to handle incoming messages. For example:
+```julia
+struct EchoFIXHandler <: AbstractMessageHandler
+end
+
+import FIX: onFIXMessage
+function onFIXMessage(this::EchoFIXHandler, msg)
+  @info "received fix message" msg
+end
+```
+
+
 ## Benchmarks
 Message parsing and converting can be made much faster. But for now it is (Intel® Core™ i3-6100U CPU @ 2.30GHz × 4):
 
